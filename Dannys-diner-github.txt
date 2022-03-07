@@ -1,0 +1,247 @@
+*** Question 1 to 9, I'm using Postgres pgAmdin and others SqlServer***
+
+
+--1--What is the total amount each customer spent at the restaurant?
+select customer_id, sum(price)
+from dannys_diner.sales s inner join dannys_diner.menu m
+on s.product_id = m.product_id
+group by customer_id
+--or
+select distinct customer_id, sum(price) over(partition by customer_id order by customer_id asc )
+from dannys_diner.sales s inner join dannys_diner.menu m
+on s.product_id = m.product_id
+order by customer_id
+
+
+
+--2- how many days has each customer visited the restaurent?
+
+with ud as (
+	select distinct customer_id, order_date
+from dannys_diner.sales
+group by customer_id, order_date
+order by customer_id
+	)
+select customer_id, count(order_date)
+from ud
+group by customer_id
+
+
+--3- What was the first item from the menu purchased by each customer?
+
+
+with tb as (
+	select *,
+		rank () over (partition by customer_id order by customer_id, order_date ) as rn
+from dannys_diner.sales s inner join dannys_diner.menu m
+on s.product_id = m.product_id
+order by customer_id, order_date
+)
+select distinct customer_id, product_name
+from tb
+where rn = 1
+
+
+
+--4 What is the most purchased item on the menu and how many times was it purchased by all customers?
+
+select product_name,
+		count(product_name) as NbPurchase
+from dannys_diner.sales s inner join dannys_diner.menu m
+on s.product_id = m.product_id
+group by product_name
+order by count(product_name) desc
+limit 1
+
+--5 Which item was the most popular for each customer?
+with tb as (
+select customer_id, 
+		product_name,
+		count(product_name) as NbPurchase
+from dannys_diner.sales s inner join dannys_diner.menu m
+on s.product_id = m.product_id
+group by product_name, customer_id
+order by customer_id, count(product_name) desc
+),
+
+tb2 as (
+select *,rank() over (partition by tb.customer_id order by customer_id, NbPurchase desc) as nb
+	from tb
+)
+select customer_id, product_name, NbPurchase  
+	from tb2
+	where nb = 1
+
+
+--6 Which item was purchased first by the customer after they became a member?
+with tb as(
+select s.customer_id,join_date,order_date,product_name, row_number () over (partition by s.customer_id order by order_date asc ) as r
+		from dannys_diner.members mb inner join dannys_diner.sales s
+		on s.customer_id = mb.customer_id
+		inner join dannys_diner.menu mn 
+		on s.product_id = mn.product_id
+where join_date <= order_date --taking into account the purchase on the same joining date we include =
+order by order_date asc
+)
+select tb.customer_id, tb.order_date, tb.product_name
+from tb
+where r=1
+
+
+--7 Which item was purchased just before the customer became a member?
+
+with tb as(
+
+select s.customer_id,join_date,order_date,product_name, rank () over (partition by s.customer_id order by order_date desc ) as r
+		from dannys_diner.members mb inner join dannys_diner.sales s
+		on s.customer_id = mb.customer_id
+		inner join dannys_diner.menu mn 
+		on s.product_id = mn.product_id
+where join_date > order_date
+order by order_date desc
+)
+select tb.customer_id, tb.product_name
+from tb
+where r=1
+
+
+
+--8 What is the total items and amount spent for each member before they became a member?
+
+with tb as(
+select s.customer_id,join_date,order_date,product_name, price
+	from dannys_diner.members mb inner join dannys_diner.sales s
+		on s.customer_id = mb.customer_id
+		inner join dannys_diner.menu mn 
+		on s.product_id = mn.product_id
+where join_date > order_date
+order by order_date asc
+)
+select tb.customer_id, 
+count(distinct product_name) as nbitem,--we put distinct if we want to the count of unique items. 
+sum(price) as total_spent
+from tb
+group by tb.customer_id 
+
+
+
+--9 If each $1 spent equates to 10 points and sushi has a 2x points multiplier - how many points would each customer have?
+
+with tb as(
+select s.customer_id, product_name, 
+	
+	case product_name
+				when 'sushi' then sum(price)*10*2
+				else sum(price)*10 end  as temp_points
+	from  dannys_diner.sales s inner join dannys_diner.menu mn 
+		on s.product_id = mn.product_id
+	group by s.customer_id,product_name
+	order by s.customer_id asc
+)
+select tb.customer_id, 		
+		sum(temp_points) as finalPoints
+from tb
+group by tb.customer_id 
+
+
+
+--10 In the first week after a customer joins the program (including their join date)
+--they earn 2x points on all items, not just sushi - how many points 
+--do customer A and B have at the end of January?
+
+
+with tb as 
+(
+	select s.customer_id,join_date,product_name,price,
+		case 
+			when mn.product_name ='sushi' then price*10*2
+			else price*10 end as temp_points,
+		mn.product_id, order_date, datepart(month,order_date) as months ,DATEadd(day,6,join_date) as valid
+		from dbo.members mb inner join dbo.sales s
+		on s.customer_id = mb.customer_id
+		inner join dbo.menu mn 
+		on s.product_id = mn.product_id
+), 
+	tb1 as (
+
+		select tb.customer_id, join_date, valid ,order_date, product_name, price, temp_points, tb.months,
+			case 
+				when tb.order_date between tb.join_date and tb.valid and tb.product_name<>'sushi' then tb.temp_points*2
+				else  tb.temp_points end as final_point
+		from tb
+		where tb.months=1
+		)
+		select tb1.customer_id,
+			sum(final_point) as Points
+		from tb1
+		group by tb1.customer_id
+
+
+--Bonus Questions
+with tb as 
+(
+	select s.customer_id,s.order_date, mb.join_date, mn.product_name, mn.price		
+	from dbo.sales s 
+		 inner join 
+		 dbo.menu mn 
+		 on s.product_id = mn.product_id
+		 Left join
+		 dbo.members mb 
+		 on s.customer_id = mb.customer_id
+
+)
+select  tb.customer_id,	tb.order_date,	tb.product_name, tb.price,
+
+			case 
+				when tb.join_date<=tb.order_date then 'Y'
+				else 'N' end as Member
+	from tb
+	order by tb.customer_id,tb.order_date
+
+
+--Bonus Ranking
+
+
+with tb as 
+(
+	select s.customer_id,s.order_date, mb.join_date, mn.product_name, mn.price		
+	from dbo.sales s 
+		 inner join 
+		 dbo.menu mn 
+		 on s.product_id = mn.product_id
+		 Left join
+		 dbo.members mb 
+		 on s.customer_id = mb.customer_id
+
+),
+tb1 as (
+
+		select  tb.customer_id,	tb.order_date,	tb.product_name, tb.price,
+
+					case 
+						when tb.join_date<=tb.order_date then 'Y'
+						else 'N' end as Member
+			from tb
+		--	order by tb.customer_id,tb.order_date *****cannot order by in cte apparently
+		)
+	select *,
+		case
+			when tb1.Member='Y' then 
+				RANK() over ( partition by tb1.customer_id,tb1.member order by tb1.customer_id,tb1.order_date asc)
+				else null end as Ranking
+	from tb1
+	order by tb1.customer_id,tb1.order_date asc
+
+
+
+
+
+
+
+
+
+
+
+
+
+
